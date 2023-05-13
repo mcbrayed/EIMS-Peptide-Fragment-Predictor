@@ -5,6 +5,6 @@ The program is run from the command line. To run, navigate to the folder contain
 Run the script using Python 3, for example:
   python3 predictFragments2023.py
   
-The main menu will be displayed once the program runs. Entering the integer associated with the menu option and pressing Enter will execute the indicated action(s) in the program.
+The main menu will be displayed once the program runs. Entering the integer associated with the menu option and pressing Enter will execute the indicated action(s) in the program. A csv file will be saved with results in the source code folder after predictions are generated.
 
 Note that to conduct multiple fragmentation predictions (second program option), you will need to have prepared a text file containing the sequences you want to conduct the analysis on listed one sequence per line in one letter code.
