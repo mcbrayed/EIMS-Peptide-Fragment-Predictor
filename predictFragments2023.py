@@ -189,6 +189,9 @@ class PepFrag():
         print("Found a total of "+str(len(side_chain_frags))+" side chain ('molecular') fragments")
 
         total_fragments.extend(side_chain_frags)
+        total_fragments,remove_count = remove_duplicate_fragments(total_fragments) #remove any duplicates
+        print("Initial grand total of "+str(len(total_fragments))+" possible peptide fragments")
+        print("Removed "+str(remove_count)+" duplicates from grand total")
         print("Found a GRAND total of "+str(len(total_fragments))+" possible peptide fragments")
         
         return total_fragments
@@ -265,7 +268,6 @@ class PepFrag():
         c_terminus_name = self.amino_acids[-1].get_name()
         new_frag_site = False
         for i in range(len(self.amino_acids)):
-           
             sub_frags = self.amino_acids[i].fragment() #get a list of amino acids labeled with their frag type and with their individual frag formulas updated
             if len(sub_frags) == 0: #ignore sites that don't have defined fragments
                 pass
@@ -298,10 +300,10 @@ class PepFrag():
                 frag_site_counter += 1 
         if correct_c_terminus == True:
             if self.amino_acids[-1].get_name() not in frag_index_dict:
-                # print("C-terminus not available to fragment")
+                print("C-terminus not available to fragment")
                 pass #indicates that C-terminus is not available to correct (e.g. the loss of side chains that retain the charge)
             else:
-                # print("Adding C-terminal fragments")
+                print("Adding C-terminal fragments")
                 for correction in c_terminus_data: #adds c-terminus fragments to C-terminal amino acid
                     temp_aa = self.amino_acids[-1].duplicate()
                     temp_aa.sub_formula(correction[1])
@@ -341,6 +343,7 @@ class PepFrag():
                     keep = False
             if keep == True:
                 filtered_combos.append(combo_list[i])
+                # print("keeping the combination!")
         print("found "+str(len(filtered_combos))+" filtered combination(s)")
         #now ready to actually generate the peptide fragment_lists
         test_counter = 0
@@ -354,6 +357,7 @@ class PepFrag():
                     if "("+frag[0]+")" == aa.get_frag_label() or frag[0] == aa.get_frag_label():
                         # print("frag matches current modification")
                         pep_frag.amino_acids[frag_index_dict[aa.get_name()]].sub_formula(frag[1])
+                # print("considering c-terminus")
                 for frag in c_terminus_data:
                     # print("considering possible frag: ",frag)
                     if frag[0] == aa.get_frag_label():
@@ -368,6 +372,7 @@ class PepFrag():
                 if pep_frag.get_formula()[-1] == 0:
                     pep_frag.add_formula([0,0,0,0,0,1]) #if uncharged, add a positive charge (need to update if adding negative ion support or if formula format changes)
                 pep_frag.update_formula()
+                # print("***adding pep_frag***\n",pep_frag)
                 peptide_fragments.append(pep_frag)
                 test_counter += 1
 
@@ -509,7 +514,18 @@ def run_multiple_predictions(seq_list,e_mass_convert_dict,index_convert_dict,out
     except FileNotFoundError:
         print("Could not write file: "+output_directory)
     return output
-            
+         
+def save_predictions(fragments,e_mass_convert_dict,index_convert_dict,output_directory = ".//FragResults.csv"):
+    print("\nSaving Fragment Prediction Results")
+    output = "Frag Seq\tPredicted m/z\tLog\n"
+    for frag in fragments:
+        output += frag.get_csv_str(e_mass_convert_dict,index_convert_dict)
+    try:
+        with open(output_directory,"w") as f:
+            f.write(output)
+    except FileNotFoundError:
+        print("Could not write file: "+output_directory)   
+
 def remove_negative_fragments(total_fragments,element_mass_conversion_dict,index_element_conversion_dict):
     final_fragments = []
     remove_count = 0
