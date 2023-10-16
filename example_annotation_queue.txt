@@ -1,0 +1,27 @@
+Thresholds
+5,25
+Use Filter
+No
+Directory Path
+D:\AminoAcidData
+Sequences and File Names
+A,Ala.txt
+C,Cys.txt
+D,Asp.txt
+E,Glu.txt
+F,Phe.txt
+G,Gly.txt
+H,His.txt
+I,Ile.txt
+K,Lys.txt
+L,Leu.txt
+M,Met.txt
+N,Asn.txt
+P,Pro.txt
+Q,Gln.txt
+R,Arg.txt
+S,Ser.txt
+T,Thr.txt
+V,Val.txt
+W,Trp.txt
+Y,Tyr.txt

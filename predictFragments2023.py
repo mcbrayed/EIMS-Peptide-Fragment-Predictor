@@ -101,6 +101,18 @@ class PepFrag():
     
     def get_frag_record(self):
         return self.fragmentation_record
+        
+    def get_csv_frag_record(self):
+        s = ""
+        frag_record_list = self.fragmentation_record.split("\n")
+        log = ""
+        for x in range(len(frag_record_list)):
+            if x == len(frag_record_list)-1:
+                log += frag_record_list[x]
+            else:
+                log += frag_record_list[x]+"|"
+        s += log
+        return s
 
     def get_csv_str(self,element_conver_dict,index_conver_dict): #generates tab-delimited output for the fragment
         s = ""
@@ -594,15 +606,205 @@ def display_license():
     with open("license.txt","r") as f:
         for line in f:
             print(line)
-   
+
+def load_ms_text_data(path,header_label = "Mass"):
+    print("passed path = ",path)
+    masses = []
+    reading = False
+    try:
+        with open(path,"r") as f:
+            for line in f:
+                if header_label in line:
+                    # print("found data header, beginning reading")
+                    reading = True
+                elif reading:
+                    try:
+                        mass = float(line.split("\t")[0])
+                        intensity = float(line.split("\t")[1].split("\n")[0])
+                        masses.append((mass,intensity))
+                    except ValueError:
+                        pass
+    except FileNotFoundError:
+        print("Error: File Could Not Be Loaded")
+    print("loaded "+str(len(masses))+" mass peaks")
+    return masses
+
+def annotate_ms_file(ms_data,predictions,emcd,iecd,error = 0.25,intensity_thresholds = [5,25],use_peak_filter = True): 
+    #intensity thresholds are percentage relative to the max intensity non-background peak
+    #peak_filter holds a list of peaks known to belong to background (e.g. protecting group peaks, peaks shared in common across all spectra, etc.)
+    #emcd = element mass conversion dictionary
+    #iecd = index element conversion dictionary
+    if use_peak_filter == True:
+        background_peaks = load_background_peaks()
+    else:
+        background_peaks = [0]
+    annotated_data = []
+    max_value = -1 #the max signal associated with the highest intensity nonbackground peak
+    mz_of_max = 0 #the m/z value of the highest intensity nonbackground peak
+    max_index = 0  #the data list index of the highest intensity nonbackground peak
+    #find the m/z and value for the highest intensity non-background peak
+    initial_point_labels = [] #store any annotations found during the initial scan to find the max signal and potential contamination peaks
+    match_found = False
+    i = 0 #peak index counter used to associate any preliminary labeling (such as background peaks) with the correct peak later when the full label/annotation is generated
+    for point in ms_data:
+        if use_peak_filter == True:
+            for peak in background_peaks:
+                match_found = False
+                val = peak[0]
+                match_found = peak_match(point[0],val,error)
+                if match_found == True:
+                    initial_point_labels.append("contam: "+peak[1].strip("\n")+"-")
+                    break #only need one match within error range to count as a match
+        if match_found == False:
+            if max_value < point[1]: #track which point corresponds to the max intensity peak
+                max_value = point[1]
+                mz_of_max = point[0]
+                max_index = i
+            initial_point_labels.append("") #no initial comment
+        i += 1 
+        
+    match_analysis_dict = dict.fromkeys(intensity_thresholds) #a dictionary with the percent intensity thresholds as keys, values are a list of the form [data_peak_count,match_peak_count,below_threshold_matches]      
+    for key in match_analysis_dict:
+        match_analysis_dict[key] = [0,0,0] #initialize the list of counters for each threshold
+    i = 0 #initial point label index
+    for point in ms_data:
+        # print("point = ",point)
+        for frag in predictions:
+            match_found = False
+            frag_val = frag.get_mz_value(emcd,iecd)
+            # print("frag val = ",frag_val)
+            # print("point[0] = ",point[0])
+            match_found = peak_match(point[0],frag_val,error)
+            if match_found == True:
+                s = str(point[0])+"\t"+str(point[1])+"\tYes ("+initial_point_labels[i]
+                if i == max_index:
+                    s += "max signal peak-"+frag.get_csv_frag_record()+")\t"+str(frag_val-point[0])
+                else:
+                    s += frag.get_csv_frag_record()+")\t"+str(frag_val-point[0])
+                if initial_point_labels[i] != "": #indicates a background/contaminant peak that should not be included in match analysis
+                    pass
+                else: #include peak in match analysis
+                    for threshold in intensity_thresholds:
+                        if point[1] >= (threshold/100)*max_value: #increment both data peak count and match count
+                            # print("************************match is above threshold")
+                            match_analysis_dict[threshold][0] += 1
+                            match_analysis_dict[threshold][1] += 1
+                        else:
+                            match_analysis_dict[threshold][2] += 1
+                            # print("XXXXXXXXmatch is not above threshold")
+                break #match found, so do not need to continue searching for a prediction match
+        if match_found == False:
+            s = str(point[0])+"\t"+str(point[1])+"\tNo ("+initial_point_labels[i]
+            if i == max_index:
+                s += "-max signal peak)"+"\t"
+            else:
+                s += ")\t"
+            if initial_point_labels[i] != "": #indicates a background/contaminant peak that should not be included in match analysis
+                    pass
+            else:
+                for threshold in intensity_thresholds:
+                    if point[1] >= (threshold/100)*max_value: #increment only the data peak count
+                        # print("*****************peak is above threshold")
+                        match_analysis_dict[threshold][0] += 1
+                    else:
+                        # print("XXXXXXXXpeak is not above threshold")
+                        pass
+        annotated_data.append(s)
+        i += 1
+    
+    # print("annotated_data = ",annotated_data)
+    return annotated_data,match_analysis_dict,(mz_of_max, max_value)
+
+def peak_match(experimental,prediction,error = 0.25):
+    if (experimental - error) <= prediction and (experimental + error) >= prediction:
+        return True
+    else:
+        return False
+    return match_found
+
+def load_background_peaks(directory = ".\\Contaminants.csv"):#loads potential background peaks for exclusion/labeling during peak matching
+    with open(directory,"r") as f:
+        background = []
+        for line in f:
+            if "Peak m/z" in line:
+                pass #skip the header
+            else:
+                data = line.split(",") #get list of form [m/z,description]
+                background.append((float(data[0]),data[1])) #add reference tuple to the list
+    return background
+
+def run_multiple_annotations(queue_file_path,emcd,iecd): #uses a queue/batch file defining the folder location and desired files to process along with the associated peptide sequence for the files to process multiple spectra in a batch
+    thresholds_loaded = False
+    filter_set = False
+    directory_chosen = False
+    thresholds = []
+    filter_choice = ""
+    counter = 1
+    with open(queue_file_path,"r") as f:
+        for line in f:
+            if "Thresholds" in line: #header line for the thresholds definitions
+                pass
+            elif "Use Filter" in line: #header line for the use filter option
+                pass
+            elif "Directory Path" in line: #header line for the directory path
+                pass
+            elif "Sequences and File Names" in line: #header line for the sequence and file name list
+                pass
+            else:
+                if thresholds_loaded == False:
+                    data = line.strip("\n").split(",") #extract the threshold definitions first
+                    for entry in data:
+                        thresholds.append(float(entry))
+                    thresholds_loaded = True
+                elif filter_set == False:
+                    filter_choice = line.strip("\n") #extract choice on whether or not to apply the background peak filter to the data while annotating
+                    filter_set = True
+                elif directory_chosen == False: #extract the folder directory where the spectra text files are located
+                    directory = line.strip("\n")
+                    directory_chosen = True
+                else:
+                    print("_"*100)
+                    print("Processing Entry No. "+str(counter))
+                    data = line.strip("\n").split(",")
+                    print(data[0])
+                    AA_obj = get_AA_object(data[0]) #use the sequence to produce a list of amino acid objects
+                    peptide = PepFrag(AA_obj,form_peptide_bonds = True) #create the PepFrag object
+                    fragments = peptide.fragment()
+                    fragments = remove_negative_fragments(fragments,emcd,iecd)
+                    if len(peptide) == 1: #indicates single amino acid
+                        fragments,remove_count = remove_duplicate_fragments(fragments)
+                    if filter_choice.lower() == "yes":
+                        apply_filter = True
+                    else:
+                        apply_filter = False
+                    ms_file_data = load_ms_text_data(directory+"\\"+data[1])
+                    annotated_data,match_data,max_data = annotate_ms_file(ms_file_data,fragments,emcd,iecd,use_peak_filter = apply_filter)
+                    new_ms_file = data[1].split(".")[0]
+                    new_ms_file += "_annotated.csv"
+                    print("new_ms_file = ",new_ms_file)
+                    print("output directory = ",directory)
+                    output_annotated_ms_file(annotated_data,match_data,max_data,directory+"\\"+new_ms_file)
+                    counter += 1
+ 
+def output_annotated_ms_file(annotated_data,match_analysis,max_info,directory = ".\\Annotated_MS_Data.csv"):
+    s = "Max Peak m/z\tMax Peak Intensity\t"
+    keys_in_order = [] #ensures that the proper data is associated with the proper key when creating the final data file (since dictionary access is not guranteed to be in the same order)
+    for item in match_analysis.items():
+        s += "Peak Count at "+str(item[0])+"%\tMatch Count at "+str(item[0])+"%\tBelow Threshold Match Count at "+str(item[0])+"%\tMatch Percent at "+str(item[0])+"%\t"
+        keys_in_order.append(item[0])
+    s += "\n"+str(max_info[0])+"\t"+str(max_info[1])+"\t" #add the data associated with the max intensity peak
+    for key in keys_in_order: #now add the data for the match percentage results
+        s +=str(match_analysis[key][0])+"\t"+str(match_analysis[key][1])+"\t"+str(match_analysis[key][2])+"\t" #granular analysis results
+        percent_match = 100*match_analysis[key][1]/match_analysis[key][0]
+        s += str(percent_match)+"\t" #add the summary statistic
+    s += "\nm/z\tIntensity\tMatch?\tMatch Error\n" #now add headers for the annotated mass spectrum data
+    for d in annotated_data:
+        s += d+"\n"
+    with open(directory,"w") as f:
+        f.write(s)
+    print("Annotated MS File saved to: ",directory)
+ 
 def main():
-    print("\npredictFragments  Copyright (C) 2023  Dominic McBrayer\n"+
-        "This program comes with ABSOLUTELY NO WARRANTY; for details type 'show w'.\n"+
-        "This is free software, and you are welcome to redistribute it\n"+
-        "under certain conditions; type 'show c' for full details."
-    )
-    
-    
     element_mass_conversion_dict = load_element_masses()
     index_element_conversion_dict = load_element_index()
 
@@ -612,24 +814,18 @@ def main():
         print("\nChoose an option:")
         print("1) Generate Fragments from Sequence")
         print("2) Run Multi-Fragment Predictions from Sequence List")
-        print("3) Exit")
+        print("3) Annotate Spectrum with Prediction Matches")
+        print("4) Annotate Multiple Spectra from File List")
+        print("5) Exit")
         choice = input()
-        if choice == "show w":
-            display_warranty()
-        
-        elif choice == "show c":
-            display_license()
-        
-        elif choice == "1":
+        if choice == "1":
             sequence = get_user_input()
             AA_obj = get_AA_object(sequence)
             peptide = PepFrag(AA_obj,form_peptide_bonds = True)
             
             fragments = peptide.fragment()
             fragments = remove_negative_fragments(fragments,element_mass_conversion_dict,index_element_conversion_dict)
-            if len(peptide) == 1: #indicates single amino acid "peptide"
-                fragments,remove_count = remove_duplicate_fragments(fragments) #remove any duplicates
-                print("A total of "+str(remove_count)+" duplicate fragments were removed from the initial grand total")
+            
             print("*"*15+"FRAGMENTATION LIST"+"*"*15)
             print("ORIGINAL PEPTIDE")
             print(peptide)
@@ -649,9 +845,48 @@ def main():
                 print("File not recognized, aborting")
        
         elif choice == "3":
+            sequence = get_user_input()
+            AA_obj = get_AA_object(sequence)
+            peptide = PepFrag(AA_obj,form_peptide_bonds = True)
+            
+            fragments = peptide.fragment()
+            fragments = remove_negative_fragments(fragments,element_mass_conversion_dict,index_element_conversion_dict)
+            if len(peptide) == 1: #indicates single amino acid "peptide"
+                fragments,remove_count = remove_duplicate_fragments(fragments) #remove any duplicates
+            apply_filter = False
+            while True:
+                use_filter = input("Do you want to filter using data in Contaminants.csv (y/n)? ")
+                if use_filter.lower() == "y":
+                    apply_filter = True
+                    break
+                elif use_filter.lower() == "n":
+                    apply_filter = False
+                    break
+                else:
+                    print("Please choose between 'y' and 'n'")
+            print("Select Mass Spectrum Text Data File")
+            ms_file = choose_file_directory()
+            print("ms_file directory = ",ms_file)
+            if ms_file != "":
+                ms_file_data = load_ms_text_data(ms_file)
+                annotated_data,match_data,max_data = annotate_ms_file(ms_file_data,fragments,element_mass_conversion_dict,index_element_conversion_dict,use_peak_filter = apply_filter)
+                new_ms_file = ms_file.split(".")[0]
+                new_ms_file+="_annotated.csv"
+                print("new_ms_file = ",new_ms_file)
+                output_annotated_ms_file(annotated_data,match_data,max_data,new_ms_file)
+            else:
+                print("File not recognized, aborting")
+            
+        elif choice == "4":
+            print("Choose your queue definition file")
+            queue_file_path = choose_file_directory()
+            print("queue_file_path = ",queue_file_path)
+            run_multiple_annotations(queue_file_path,element_mass_conversion_dict,index_element_conversion_dict)
+        
+        elif choice == "5":
             return
         else:
-            print("Please select from options 1-3")
+            print("Please select from options 1-5")
 
 if __name__ == "__main__":
     main()
